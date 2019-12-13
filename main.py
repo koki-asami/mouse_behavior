@@ -1,10 +1,12 @@
 from pdf2image import convert_from_path
 
-def cvtpdf2img(filename, num):
-    pages = convert_from_path(filename, 500)
+def cvtpdf2img(filename):
+    pages = convert_from_path(filename+'.PDF', 500)
 
     for i, page in enumerate(pages):
-        page.save('data/out_' + str(num) + '_' + str(i) + '.jpg', "JPEG")
+        page.save('data/out_' + str(filename) + '_' + str(i) + '.jpg', "JPEG")
+
+    return i
 
 
 import cv2
@@ -19,15 +21,76 @@ import csv
 import random
 import os
 import sys
+import json
+from yolo.backend.utils.box import draw_scaled_boxes
+import yolo
+from yolo.frontend import create_yolo
+import traceback
+
+yolo_detector = create_yolo("ResNet50", ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"], 416)
+classes = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"]
+DEFAULT_WEIGHT_FILE = "weights/weights.h5"
+yolo_detector.load_weights(DEFAULT_WEIGHT_FILE)
 
 model = Net()
+alpha_classes = (["C","I","W","blank"])
 
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+transform = transforms.Compose([
+    transforms.Resize((32,32)),                           
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+
+def predict_alphabet(image, model_):
+    model.eval()
+    image_tensor = transform(image).float()
+    image_tensor = image_tensor.unsqueeze_(0)
+    input = image_tensor.to(device)
+    output = model_(input)
+    _, pred = torch.max(output, 1)
+    return alpha_classes[pred.item()]
+
+
+def predict_time(img, THRESHOLD=0.2):
+    boxes, probs = yolo_detector.predict(img, THRESHOLD)
+
+    image, scaled_boxes = draw_scaled_boxes(img,
+                                boxes,
+                                probs,
+                                ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"])
+    
+    detected = []
+    for prob in probs:
+        detected.append(classes[np.argmax(prob)])
+    
+    final = []
+    for i in range(len(scaled_boxes)):
+        dict = {}
+        dict['x'] = scaled_boxes[i][0]
+        dict['w'] = scaled_boxes[i][1]
+        dict['y'] = scaled_boxes[i][2]
+        dict['h'] = scaled_boxes[i][3]
+        dict['class'] = detected[i]
+        
+        final.append(dict)
+
+    final=sorted(final, key=lambda x:x['x'])
+    detected =  [sub['class'] for sub in final]
+    detected = ''.join(detected)
+    #print('Detected: ', detected)
+
+    return detected
+
+model = Net()
 alpha_classes = (["C","I","W","blank"])
 
 def make_straight(img):
 
     ### Make straight
-    
+    print('.')
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     ret,thresh = cv2.threshold(gray,127,255,cv2.THRESH_BINARY)
@@ -69,36 +132,16 @@ def make_straight(img):
     psp_matrix = cv2.getPerspectiveTransform(perspective1,perspective2)
     img_psp = cv2.warpPerspective(img, psp_matrix,(1654,2340))
 
- 
 
-    #cv2.imwrite("image_modified.png",img_psp)
-    #cv2.imshow('output', img_psp)
+
+    #cv2.imshow('time', img_psp)
     #cv2.waitKey(0)
+    #cv2.imwrite('tmp.png', img_psp)
 
     return img_psp
     #####################
     # END Make straight #
     #####################
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-transform = transforms.Compose([
-    transforms.Resize((32,32)),                           
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
-])
-
-
-def predict_alphabet(image, model_):
-    model.eval()
-    image_tensor = transform(image).float()
-    image_tensor = image_tensor.unsqueeze_(0)
-    input = image_tensor.to(device)
-    output = model_(input)
-    _, pred = torch.max(output, 1)
-    return alpha_classes[pred.item()]
-
-
-
 
 
 def sort(list_, idx):
@@ -121,86 +164,65 @@ def find_min(list_, idx):
 
 
 ############
+#   time   #
+############
+
+def time(img):
+    print('.')
+    H = img.shape[0]
+    W = img.shape[1]
+    times = []
+    for i in range(0, H, 74):
+        input = img[i:i+74, :]
+        #cv2.imshow('input',input)
+        #cv2.waitKey(0)
+        detected = predict_time(input)
+        times.append(detected)
+    return times
+
+############
 # Alphabet #
 ############
 def alphabet(img, prev, step):
+    print('.')
     model = Net()
     param = torch.load('weights/alphabet3.pth', map_location='cpu') #delete map_location if you use cuda #model__Feb_5.pth
     model.load_state_dict(param)
-    
-    
-    i = 0
-    j = 0
-    while(prev + step <= img.shape[0]):
-        episode = []
-        
-        if i > 0:
-            #print(prev+5, prev+step)
-            im = img[prev+6:prev+step-2,690:855]
-            #prev += 10
-        else:
-            #print(0, step)
-            im = img[5:step, 690:855] #250:430 <- end
-            #cv2.imshow("input", im)
-            #cv2.waitKey(0)
-            
 
+    alphabets = []
+    H = img.shape[0]
+    W = img.shape[1]
+    for i in range(0, H, 74):
+        im = img[i+5:i+74-5, (int(W/2)-35):(int(W/2)+35)]
         # Convert to grayscale and apply Gaussian filtering
         im_gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-        im_gray = cv2.GaussianBlur(im_gray, (5, 5), 0)
+        #im_gray = cv2.GaussianBlur(im_gray, (5, 5), 0)
     
         # Threshold the image
-        ret, im_th_INV = cv2.threshold(im_gray, 170, 255, cv2.THRESH_BINARY)
-        #ret, im_th = cv2.threshold(im_gray, 125, 255, cv2.THRESH_BINARY)
-        im_th_INV = cv2.copyMakeBorder(im_th_INV,10,10,10,10,cv2.BORDER_CONSTANT,value=[255,255,255])#value=[255,255,255])
-        #cv2.imshow("Resulting Image with Rectangular ROIs", im_th_INV)
-        #cv2.waitKey(0)
+        ret, input_ = cv2.threshold(im_gray, 170, 255, cv2.THRESH_BINARY)
         
-        # Find contours in the image
-        ctrs, hier = cv2.findContours(im_th_INV.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        input_ = cv2.resize(input_, (32,32))
+        #cv2.imshow("image", input_)
+        #cv2.waitKey(0)
+                                 
+        input_ = Image.fromarray(input_)
+        pred = predict_alphabet(input_, model)
+        #print(pred)
+        cv2.putText(im, str(pred), (10, 20),cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 2)
 
-        # Get rectangles contains each contour
-        rects = [cv2.boundingRect(ctr) for ctr in ctrs if cv2.contourArea(ctr) > 50 ]#and cv2.contourArea(ctr) < 8000]
-
-                
-        im = cv2.cvtColor(im_th_INV, cv2.COLOR_GRAY2BGR)
-        for i, rect in enumerate(rects):
-            
-            cv2.rectangle(im, (rect[0]+40, rect[1]+10), (rect[0] + rect[2]-40, rect[1] + rect[3]-10), (0, 255, 0), 1)
-            
-            input_ = im_th_INV[rect[1]+10:rect[1]+rect[3]-10, rect[0]+40:rect[0]+rect[2]-40]
-            input_ = cv2.copyMakeBorder(input_,0,0,10,10,cv2.BORDER_CONSTANT,value=[255,255,255])#value=[255,255,255])
-            input_ = cv2.resize(input_, (32,32))
-            #cv2.imshow("image", input_)
-            #cv2.waitKey(0)
-            #cv2.imwrite("raw/" +"alphabet" + str(random.randint(0,10000)) + "11_input" + str(j) + ".png", input_)
-                     
-            input_ = Image.fromarray(input_)
-            pred = predict_alphabet(input_, model)
-            #print(pred)
-            cv2.putText(im, str(pred), (10, 20),cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 0), 2)
-
-            if pred == 'blank':
-                episode.append('')
-            else:
-                episode.append(pred[0])
+        if pred == 'blank':
+            alphabets.append('')
+        else:
+            alphabets.append(pred[0])
 
             
-
-
-        episodes.append(episode[0])
-
-        prev += step
-        i += 1
-        j += 1
         #cv2.imshow("image", im)
         #cv2.waitKey(0)
 
-    return episodes
-        ################
-        # END ALPHABET #
-        ################
-        ######
+    return alphabets
+################
+# END ALPHABET #
+################
 
 def touch(path):
     if os.path.isfile(path):
@@ -215,28 +237,64 @@ def export2csv(imfile, lists):
     touch(filename)
     with open(filename, 'w') as myfile:
         wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
-        wr.writerow(lists)
+        for data in lists:
+            print(data)
+            wr.writerow(data)
 
 
 
 if __name__ == '__main__':
     args = sys.argv
-    if args[0]:
-        file = args[1].split('.')[0]
+    if args[1]:
+        file = args[1].split('.PDF')[0]
         print('get arg', file)
     else:
-        file = 'pernull2 No.1-14.PDF'
-    #cvtpdf2img('pernull2 No.1-14.PDF', 7)
+        print("Don't get args loading default pdf ...")
+        file = 'null1No.35_39.PDF'
+    cnt = cvtpdf2img(file)
+    starts = []
+    ends = []
     bhvs = []
-    cnt = 0
-    for imfile in glob.glob('data/out*.jpg'):
+    
+    #for imfile in glob.glob('data/out_'+file+'*.jpg'):
+    for i in range(cnt+1):
         try:
+            imfile = 'data/out_' + file + '_' + str(i) + '.jpg'
             print("loading " + imfile + '...')
             img = cv2.imread(imfile)
             img  = make_straight(img)
-            img = img[55:, 220:1110]
+
+            img_start = img.copy()
+            img_start = img_start[55:, 220:440]
+            img_start = cv2.fastNlMeansDenoisingColored(img_start,None,10,10,7,21)
+            #cv2.imshow('start',img_start)
+            #cv2.waitKey(0)
             
-            img = cv2.resize(img, (888,2263))
+            img_end = img.copy()
+            img_end = img_end[55:, 440:660]
+            img_end = cv2.fastNlMeansDenoisingColored(img_end,None,10,10,7,21)
+            #plt.imshow(img_end)
+            #plt.title('end')
+            #plt.show()
+            
+            img_alphabet = img.copy()
+            img_alphabet = img_alphabet[55:, 880:1100]
+            img_alphabet = cv2.fastNlMeansDenoisingColored(img_alphabet,None,10,10,7,21)
+            #plt.imshow(img_alphabet)
+            #plt.title('alpaebat')
+            #plt.show()
+            #cv2.imshow('alpha',img_alphabet)
+            #cv2.waitKey(0)
+            #img = img[55:, 220:1110]
+            
+            start = time(img_start)
+            for val in start:
+                starts.append(val)
+            
+            end = time(img_end)
+            for val in end:
+                ends.append(val)
+               
             prev = 0
             step = int(img.shape[0]/31)
         
@@ -244,13 +302,23 @@ if __name__ == '__main__':
             
             episodes =[]
             i = 0
-            alphabets = alphabet(img, prev, step)
+            alphabets = alphabet(img_alphabet, prev, step)
 
             for bhv in alphabets:
                 bhvs.append(bhv)
 
         except:
-            pass
+            traceback.print_exc()
+            
+#print('st: ',starts[32])
+#print('en: ',ends[32]))
+#print(bhvs[32])
+output = [['start', 'end', 'episode']]
 
-print(bhvs)
-export2csv(file, bhvs)
+for i in range(len(starts)):
+    print(i)
+    tmp = [starts[i], ends[i], bhvs[i]]
+    output.append(tmp)
+
+print(output)
+export2csv(file, output)
