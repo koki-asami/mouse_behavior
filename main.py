@@ -29,7 +29,7 @@ import traceback
 
 yolo_detector = create_yolo("ResNet50", ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"], 416)
 classes = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"]
-DEFAULT_WEIGHT_FILE = "weights/weights.h5"
+DEFAULT_WEIGHT_FILE = os.path.join("weights", "weights.h5")
 yolo_detector.load_weights(DEFAULT_WEIGHT_FILE)
 
 model = Net()
@@ -186,7 +186,7 @@ def time(img):
 def alphabet(img, prev, step):
     print('.')
     model = Net()
-    param = torch.load('weights/alphabet3.pth', map_location='cpu') #delete map_location if you use cuda #model__Feb_5.pth
+    param = torch.load(os.path.join('weights','alphabet3.pth'), map_location='cpu') #delete map_location if you use cuda #model__Feb_5.pth
     model.load_state_dict(param)
 
     alphabets = []
@@ -233,9 +233,10 @@ def touch(path):
 
 def export2csv(imfile, lists):
     
-    filename = ('csv/'+ imfile + '.csv')
-    touch(filename)
-    with open(filename, 'w') as myfile:
+    filename = (imfile + '.csv')
+    file = os.path.join('csv', filename)
+    touch(file)
+    with open(file, 'w') as myfile:
         wr = csv.writer(myfile, quoting=csv.QUOTE_ALL)
         for data in lists:
             print(data)
@@ -259,7 +260,9 @@ if __name__ == '__main__':
     #for imfile in glob.glob('data/out_'+file+'*.jpg'):
     for i in range(cnt+1):
         try:
-            imfile = 'data/out_' + file + '_' + str(i) + '.jpg'
+
+            imfile = 'out_' + file + '_' + str(i) + '.jpg'
+            imfile = os.path.join('data', imfile)
             print("loading " + imfile + '...')
             img = cv2.imread(imfile)
             img  = make_straight(img)
